@@ -107,19 +107,37 @@
         } catch (e) { logToPage(['❌ Save error', String(e)]); alert('Save failed.'); }
       });
 
-      document.getElementById('btnReset')?.addEventListener('click', async () => {
-        try {
-          await report.resetFilters();
-          localStorage.removeItem(savedKey(data.reportId));
-          alert('🔄 View reset!');
-        } catch (e) { logToPage(['❌ Reset error', String(e)]); alert('Reset failed.'); }
-      });
+     document.getElementById('btnReset').onclick = async () => {
+  try {
+    // 1) Clear REPORT-level filters
+    await report.setFilters([]);
 
-    } catch (err) {
-      logToPage(['❌ Outer error', String(err)]);
-      console.error(err);
+    // 2) Clear PAGE-level filters (mọi trang)
+    const pages = await report.getPages();
+    for (const page of pages) {
+      await page.setFilters([]);
     }
+
+    // 3) Reset mọi SLICER về trạng thái rỗng
+    for (const page of pages) {
+      const visuals = await page.getVisuals();
+      for (const v of visuals) {
+        if (v.type && v.type.toLowerCase() === 'slicer' && v.setSlicerState) {
+          await v.setSlicerState({ filters: [] }); // xoá chọn trong slicer
+        }
+      }
+    }
+
+    // 4) Xoá persistent filters đã lưu (localStorage)
+    const key = savedKey((await report.getId && await report.getId()) || 'default');
+    localStorage.removeItem(key);
+
+    alert('🔄 View reset!');
+  } catch (e) {
+    console.error('Reset view error:', e);
+    alert('Reset failed. Check console.');
   }
+};
 
   loadReport();
   </script>
