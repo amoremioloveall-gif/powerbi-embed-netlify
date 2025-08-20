@@ -107,18 +107,53 @@
 
       // Nút Reset (chạy bookmark "Default")
       document.getElementById('btnReset')?.addEventListener('click', async () => {
-        try {
-          await report.bookmarksManager.apply('Default');
-          localStorage.removeItem(savedKey(data.reportId));
-          alert('🔄 Reset to Default bookmark!');
-        } catch (e) { logToPage(['❌ Reset error', String(e)]); alert('Reset failed.'); }
-      });
+  try {
+    // Lấy danh sách bookmarks
+    const list = await report.bookmarksManager.getBookmarks();
+    console.log('Bookmarks:', list);
+    // Log ra trang để bạn thấy tên thật
+    const names = (list || []).map(b => `${b.name} | ${b.displayName}`).join('\n');
+    logToPage('📑 Available bookmarks:\n' + names);
 
-    } catch (err) {
-      logToPage(['❌ Outer error', String(err)]);
-      console.error(err);
+    // Tìm "Default" theo name hoặc displayName (không phân biệt hoa/thường)
+    const findDefault = (arr) => {
+      const want = 'default';
+      return (arr || []).find(b =>
+        (b.name && b.name.toLowerCase() === want) ||
+        (b.displayName && b.displayName.toLowerCase() === want)
+      );
+    };
+
+    let def = findDefault(list);
+
+    // Nếu không thấy, thử bookmark đầu tiên (để test nhanh)
+    if (!def && list && list.length) {
+      logToPage('⚠️ Bookmark "Default" not found. Will try first bookmark as fallback.');
+      def = list[0];
     }
+
+    if (def) {
+      await report.bookmarksManager.apply(def.name);
+      // Xóa view người dùng đã lưu
+      const key = savedKey((await (async()=>{ try { return (await report.getId?.()) } catch(e){ return null } })()) || ''); // an toàn nếu SDK không có getId()
+      localStorage.removeItem(savedKey(data.reportId)); // dùng reportId trả từ server là chắc nhất
+      alert(`🔄 Reset to bookmark: ${def.displayName || def.name}`);
+    } else {
+      // Fallback: không có bookmark nào → clear filters nhẹ nhàng
+      logToPage('ℹ️ No bookmarks available. Fallback to clearing filters.');
+      try { await report.setFilters([]); } catch(e){ logToPage('clear report filters fail: ' + e); }
+      const pages = await report.getPages();
+      for (const p of pages) {
+        try { await p.setFilters([]); } catch(e){ logToPage(`clear page ${p.name} fail: ` + e); }
+      }
+      localStorage.removeItem(savedKey(data.reportId));
+      alert('🔄 Reset filters (no bookmark found).');
+    }
+  } catch (e) {
+    logToPage(['❌ Reset error', String(e)]);
+    alert('Reset failed. See log below.');
   }
+});
 
   loadReport();
   </script>
