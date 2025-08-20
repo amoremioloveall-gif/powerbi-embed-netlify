@@ -1,5 +1,3 @@
-const fetch = (...args) => import('node-fetch').then(({default: fetch}) => fetch(...args)); // fallback nếu runtime cũ
-
 function corsHeaders() {
   return {
     'Access-Control-Allow-Origin': '*',
@@ -21,7 +19,7 @@ exports.handler = async (event) => {
   const DATASET_ID    = process.env.DATASET_ID;
 
   try {
-    // 1) Lấy Azure AD access token
+    // 1) Lấy Azure AD access token (dùng fetch built-in của Node 18+)
     const tokenRes = await fetch(`https://login.microsoftonline.com/${TENANT_ID}/oauth2/v2.0/token`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
