@@ -4,12 +4,18 @@
   <meta charset="utf-8">
   <title>Power BI Report Embed</title>
   <style>
-    body { font-family: sans-serif; margin: 0; padding: 20px; }
+    body { font-family: sans-serif; margin: 0; padding: 16px; }
     #reportContainer { width: 100%; height: 90vh; border: 1px solid #ddd; }
+    .badge { display:inline-block; padding:4px 8px; border-radius:6px; margin-left:8px; font-size:12px; }
+    .view { background:#eef; }
+    .edit { background:#fee; }
   </style>
 </head>
 <body>
-  <h2>Survey Report Demo</h2>
+  <h2>
+    Survey Report Demo
+    <span id="modeBadge" class="badge view">View</span>
+  </h2>
   <div id="reportContainer"></div>
 
   <!-- Power BI Client SDK -->
@@ -17,38 +23,63 @@
   <script>
     const models = window['powerbi-client'].models;
 
+    function qs(name) {
+      const url = new URL(location.href);
+      return url.searchParams.get(name);
+    }
+
     async function loadReport() {
       try {
-        // Gọi Netlify Function để lấy token, embedUrl, reportId
-        const res = await fetch('/.netlify/functions/embed-token');
+        // 1) Quyết định chế độ
+        const isAdmin = qs('admin') === '1';
+        const mode = isAdmin ? 'edit' : 'view';
+
+        // 2) Ghép URL gọi function + cho phép override IDs (nếu truyền trên URL)
+        const params = new URLSearchParams();
+        params.set('mode', mode);
+        if (qs('reportId'))  params.set('reportId',  qs('reportId'));
+        if (qs('datasetId')) params.set('datasetId', qs('datasetId'));
+        if (qs('groupId'))   params.set('groupId',   qs('groupId'));
+
+        const res = await fetch('/.netlify/functions/embed-token?' + params.toString());
         const data = await res.json();
 
         if (data.error) {
-          document.body.innerHTML += "<pre style='color:red'>"+JSON.stringify(data,null,2)+"</pre>";
+          document.body.insertAdjacentHTML('beforeend', "<pre style='color:red'>"+JSON.stringify(data,null,2)+"</pre>");
           return;
         }
 
+        // 3) Cập nhật badge chế độ
+        const badge = document.getElementById('modeBadge');
+        badge.textContent = data.mode || (isAdmin ? 'Edit' : 'View');
+        badge.className = 'badge ' + (isAdmin ? 'edit' : 'view');
+
+        // 4) Cấu hình embed (Edit cho admin, View cho user)
         const config = {
           type: 'report',
           id: data.reportId,
           embedUrl: data.embedUrl,
           accessToken: data.token,
           tokenType: models.TokenType.Embed,
+          viewMode: isAdmin ? models.ViewMode.Edit : models.ViewMode.View,
           settings: {
-            panes: { filters: { visible: true }, pageNavigation: { visible: true } },
+            panes: {
+              filters: { visible: true },
+              pageNavigation: { visible: true }
+            },
             navContentPaneEnabled: true
           }
         };
 
-        // Gắn report vào div
         const container = document.getElementById('reportContainer');
         const report = powerbi.embed(container, config);
 
-        // Lắng nghe sự kiện lỗi
-        report.on("error", e => console.error(e.detail));
+        // 5) Lắng nghe sự kiện
+        report.on('loaded', () => console.log('Report loaded'));
+        report.on('error', e => console.error(e.detail));
 
       } catch (err) {
-        console.error("Error loading report:", err);
+        console.error('Error loading report:', err);
       }
     }
 
