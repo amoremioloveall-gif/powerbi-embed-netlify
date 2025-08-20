@@ -1,29 +1,58 @@
 <!doctype html>
 <html>
-<head><meta charset="utf-8"><title>Power BI Embed</title></head>
+<head>
+  <meta charset="utf-8">
+  <title>Power BI Report Embed</title>
+  <style>
+    body { font-family: sans-serif; margin: 0; padding: 20px; }
+    #reportContainer { width: 100%; height: 90vh; border: 1px solid #ddd; }
+  </style>
+</head>
 <body>
-  <h3>Power BI Report</h3>
-  <div id="report" style="height:720px;border:1px solid #ddd"></div>
+  <h2>Survey Report Demo</h2>
+  <div id="reportContainer"></div>
 
+  <!-- Power BI Client SDK -->
   <script src="https://cdn.jsdelivr.net/npm/powerbi-client/dist/powerbi.min.js"></script>
   <script>
     const models = window['powerbi-client'].models;
-    async function load() {
-      const r = await fetch('/.netlify/functions/embed-token');
-      const j = await r.json();
-      if (j.error) { document.body.insertAdjacentHTML('beforeend', '<pre>'+j.error+'</pre>'); return; }
-      const config = {
-        type: 'report',
-        id: j.reportId,
-        embedUrl: j.embedUrl,
-        accessToken: j.token,
-        tokenType: models.TokenType.Embed,
-        settings: { panes: { filters: { visible: true } }, navContentPaneEnabled: true }
-      };
-      const report = powerbi.embed(document.getElementById('report'), config);
-      report.on('error', e => console.error(e.detail));
+
+    async function loadReport() {
+      try {
+        // Gọi Netlify Function để lấy token, embedUrl, reportId
+        const res = await fetch('/.netlify/functions/embed-token');
+        const data = await res.json();
+
+        if (data.error) {
+          document.body.innerHTML += "<pre style='color:red'>"+JSON.stringify(data,null,2)+"</pre>";
+          return;
+        }
+
+        const config = {
+          type: 'report',
+          id: data.reportId,
+          embedUrl: data.embedUrl,
+          accessToken: data.token,
+          tokenType: models.TokenType.Embed,
+          settings: {
+            panes: { filters: { visible: true }, pageNavigation: { visible: true } },
+            navContentPaneEnabled: true
+          }
+        };
+
+        // Gắn report vào div
+        const container = document.getElementById('reportContainer');
+        const report = powerbi.embed(container, config);
+
+        // Lắng nghe sự kiện lỗi
+        report.on("error", e => console.error(e.detail));
+
+      } catch (err) {
+        console.error("Error loading report:", err);
+      }
     }
-    load();
+
+    loadReport();
   </script>
 </body>
 </html>
