@@ -16,146 +16,136 @@
     Survey Report Demo
     <span id="modeBadge" class="badge view">View</span>
   </h2>
+
   <button id="btnSave">💾 Save my view</button>
   <button id="btnReset">🔄 Reset (to Default)</button>
+
   <div id="reportContainer"></div>
   <pre id="log" style="color:#b00; white-space:pre-wrap;"></pre>
 
   <!-- Power BI Client SDK -->
   <script src="https://cdn.jsdelivr.net/npm/powerbi-client/dist/powerbi.min.js"></script>
   <script>
-  const models = window['powerbi-client'].models;
-  let report; // giữ toàn cục
+    const models = window['powerbi-client'].models;
+    let report; // giữ toàn cục
+    function qs(name){ const u=new URL(location.href); return u.searchParams.get(name); }
+    function savedKey(reportId){ return `pbi_filters_${reportId}`; }
+    function logToPage(x){ const el=document.getElementById('log'); el.textContent += (typeof x==='string'?x:JSON.stringify(x,null,2))+"\n"; }
 
-  function qs(name) {
-    const url = new URL(location.href);
-    return url.searchParams.get(name);
-  }
-  function savedKey(reportId) { return `pbi_filters_${reportId}`; }
-  function logToPage(x){ 
-    const el=document.getElementById('log'); 
-    el.textContent += (typeof x==='string'?x:JSON.stringify(x,null,2))+"\n"; 
-  }
+    async function loadReport() {
+      try {
+        const isAdmin = qs('admin') === '1';
+        const mode = isAdmin ? 'edit' : 'view';
 
-  async function loadReport() {
-    try {
-      const isAdmin = qs('admin') === '1';
-      const mode = isAdmin ? 'edit' : 'view';
+        // Gọi function lấy token
+        const params = new URLSearchParams();
+        params.set('mode', mode);
+        ['reportId','datasetId','groupId'].forEach(k => { if (qs(k)) params.set(k, qs(k)); });
 
-      // Gọi function lấy token
-      const params = new URLSearchParams();
-      params.set('mode', mode);
-      ['reportId','datasetId','groupId'].forEach(k => { if (qs(k)) params.set(k, qs(k)); });
-
-      const res = await fetch('/.netlify/functions/embed-token?' + params.toString());
-      let data;
-      try { data = await res.json(); } catch (e) {
-        logToPage('❌ Không parse được JSON từ embed-token'); return;
-      }
-      if (!res.ok || data.error) { logToPage(['❌ embed-token error', data]); return; }
-
-      // Badge
-      const badge = document.getElementById('modeBadge');
-      badge.textContent = data.mode || (isAdmin ? 'Edit' : 'View');
-      badge.className = 'badge ' + (isAdmin ? 'edit' : 'view');
-
-      // Cấu hình embed
-      const config = {
-        type: 'report',
-        id: data.reportId,
-        embedUrl: data.embedUrl,
-        accessToken: data.token,
-        tokenType: models.TokenType.Embed,
-        viewMode: isAdmin ? models.ViewMode.Edit : models.ViewMode.View,
-        settings: {
-          panes: { filters: { visible: true }, pageNavigation: { visible: true } },
-          navContentPaneEnabled: true
+        const res = await fetch('/.netlify/functions/embed-token?' + params.toString());
+        let data;
+        try { data = await res.json(); } catch (e) {
+          logToPage('❌ Không parse được JSON từ embed-token'); return;
         }
-      };
+        if (!res.ok || data.error) { logToPage(['❌ embed-token error', data]); return; }
 
-      const container = document.getElementById('reportContainer');
-      report = powerbi.embed(container, config);
+        // Badge
+        const badge = document.getElementById('modeBadge');
+        badge.textContent = data.mode || (isAdmin ? 'Edit' : 'View');
+        badge.className = 'badge ' + (isAdmin ? 'edit' : 'view');
 
-      // Sự kiện
-      report.on('loaded', async () => {
-        logToPage('✅ Report loaded');
-        // Áp filters đã lưu (nếu có)
-        try {
-          const key = savedKey(data.reportId);
-          const saved = localStorage.getItem(key);
-          if (saved) {
-            const parsed = JSON.parse(saved);
-            if (Array.isArray(parsed)) {
-              await report.setFilters(parsed);
-              logToPage('🔁 Applied saved filters');
-            }
+        // Cấu hình embed
+        const config = {
+          type: 'report',
+          id: data.reportId,
+          embedUrl: data.embedUrl,
+          accessToken: data.token,
+          tokenType: models.TokenType.Embed,
+          viewMode: isAdmin ? models.ViewMode.Edit : models.ViewMode.View,
+          settings: {
+            panes: { filters: { visible: true }, pageNavigation: { visible: true } },
+            navContentPaneEnabled: true
           }
-        } catch (e) { logToPage(['⚠️ Apply filters error', String(e)]); }
-      });
+        };
 
-      report.on('rendered', () => logToPage('🎨 Report rendered'));
-      report.on('error', e => { logToPage(['❌ Report error', e?.detail || e]); });
+        const container = document.getElementById('reportContainer');
+        report = powerbi.embed(container, config);
 
-      // Nút Save
-      document.getElementById('btnSave')?.addEventListener('click', async () => {
-        try {
-          const filters = await report.getFilters();
-          localStorage.setItem(savedKey(data.reportId), JSON.stringify(filters));
-          alert('✅ View saved!');
-        } catch (e) { logToPage(['❌ Save error', String(e)]); alert('Save failed.'); }
-      });
+        // Sự kiện
+        report.on('loaded', async () => {
+          logToPage('✅ Report loaded');
+          // Áp filters đã lưu (nếu có)
+          try {
+            const key = savedKey(data.reportId);
+            const saved = localStorage.getItem(key);
+            if (saved) {
+              const parsed = JSON.parse(saved);
+              if (Array.isArray(parsed)) {
+                await report.setFilters(parsed);
+                logToPage('🔁 Applied saved filters');
+              }
+            }
+          } catch (e) { logToPage(['⚠️ Apply filters error', String(e)]); }
+        });
 
-      // Nút Reset (chạy bookmark "Default")
-      document.getElementById('btnReset')?.addEventListener('click', async () => {
-  try {
-    // Lấy danh sách bookmarks
-    const list = await report.bookmarksManager.getBookmarks();
-    console.log('Bookmarks:', list);
-    // Log ra trang để bạn thấy tên thật
-    const names = (list || []).map(b => `${b.name} | ${b.displayName}`).join('\n');
-    logToPage('📑 Available bookmarks:\n' + names);
+        report.on('rendered', () => logToPage('🎨 Report rendered'));
+        report.on('error', e => { logToPage(['❌ Report error', e?.detail || e]); });
 
-    // Tìm "Default" theo name hoặc displayName (không phân biệt hoa/thường)
-    const findDefault = (arr) => {
-      const want = 'default';
-      return (arr || []).find(b =>
-        (b.name && b.name.toLowerCase() === want) ||
-        (b.displayName && b.displayName.toLowerCase() === want)
-      );
-    };
+        // Nút Save
+        document.getElementById('btnSave')?.addEventListener('click', async () => {
+          try {
+            const filters = await report.getFilters();
+            localStorage.setItem(savedKey(data.reportId), JSON.stringify(filters));
+            alert('✅ View saved!');
+          } catch (e) { logToPage(['❌ Save error', String(e)]); alert('Save failed.'); }
+        });
 
-    let def = findDefault(list);
+        // Nút Reset (áp bookmark "Default" nếu có; nếu không thì clear nhẹ nhàng)
+        document.getElementById('btnReset')?.addEventListener('click', async () => {
+          try {
+            if (!report.bookmarksManager || !report.bookmarksManager.getBookmarks) {
+              logToPage('ℹ️ Bookmarks API not available in this context.');
+              throw new Error('Bookmarks API not available');
+            }
 
-    // Nếu không thấy, thử bookmark đầu tiên (để test nhanh)
-    if (!def && list && list.length) {
-      logToPage('⚠️ Bookmark "Default" not found. Will try first bookmark as fallback.');
-      def = list[0];
-    }
+            const list = await report.bookmarksManager.getBookmarks();
+            const names = (list || []).map(b => `${b.name} | ${b.displayName}`).join('\n');
+            logToPage('📑 Available bookmarks:\n' + names);
 
-    if (def) {
-      await report.bookmarksManager.apply(def.name);
-      // Xóa view người dùng đã lưu
-      const key = savedKey((await (async()=>{ try { return (await report.getId?.()) } catch(e){ return null } })()) || ''); // an toàn nếu SDK không có getId()
-      localStorage.removeItem(savedKey(data.reportId)); // dùng reportId trả từ server là chắc nhất
-      alert(`🔄 Reset to bookmark: ${def.displayName || def.name}`);
-    } else {
-      // Fallback: không có bookmark nào → clear filters nhẹ nhàng
-      logToPage('ℹ️ No bookmarks available. Fallback to clearing filters.');
-      try { await report.setFilters([]); } catch(e){ logToPage('clear report filters fail: ' + e); }
-      const pages = await report.getPages();
-      for (const p of pages) {
-        try { await p.setFilters([]); } catch(e){ logToPage(`clear page ${p.name} fail: ` + e); }
+            const def = (list || []).find(b => {
+              const n = (b.name || '').toLowerCase();
+              const d = (b.displayName || '').toLowerCase();
+              return n === 'default' || d === 'default';
+            });
+
+            if (def) {
+              await report.bookmarksManager.apply(def.name);
+              localStorage.removeItem(savedKey(data.reportId));
+              alert(`🔄 Reset to bookmark: ${def.displayName || def.name}`);
+            } else {
+              // Fallback: clear report/page filters (không động tới slicers để tránh “trắng” quá)
+              logToPage('⚠️ Bookmark "Default" not found. Fallback to clearing report/page filters.');
+              try { await report.setFilters([]); } catch(e){ logToPage('clear report filters fail: ' + e); }
+              const pages = await report.getPages();
+              for (const p of pages) {
+                try { await p.setFilters([]); } catch(e){ logToPage(`clear page ${p.name} fail: ` + e); }
+              }
+              localStorage.removeItem(savedKey(data.reportId));
+              alert('🔄 Reset filters (no bookmark found).');
+            }
+          } catch (e) {
+            logToPage(['❌ Reset error', String(e)]);
+            alert('Reset failed. See log below.');
+          }
+        });
+
+      } catch (err) {
+        logToPage(['❌ Outer error', String(err)]);
+        console.error(err);
       }
-      localStorage.removeItem(savedKey(data.reportId));
-      alert('🔄 Reset filters (no bookmark found).');
-    }
-  } catch (e) {
-    logToPage(['❌ Reset error', String(e)]);
-    alert('Reset failed. See log below.');
-  }
-});
+    } // <-- ĐÃ ĐÓNG loadReport()
 
-  loadReport();
+    loadReport();
   </script>
 </body>
 </html>
