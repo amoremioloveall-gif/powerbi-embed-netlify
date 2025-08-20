@@ -19,49 +19,44 @@
   <button id="btnSave">💾 Save my view</button>
 <button id="btnReset">🔄 Reset</button>
   <div id="reportContainer"></div>
+<pre id="log" style="color:#b00; white-space:pre-wrap;"></pre>
 
   <!-- Power BI Client SDK -->
   <script src="https://cdn.jsdelivr.net/npm/powerbi-client/dist/powerbi.min.js"></script>
   <script>
-    <script>
   const models = window['powerbi-client'].models;
-  let report; // để dùng ngoài loadReport()
+  let report; // dùng toàn cục
 
   function qs(name) {
     const url = new URL(location.href);
     return url.searchParams.get(name);
   }
-
-  // Tạo key lưu filters riêng theo reportId (tránh đè nhau)
-  function savedKey(reportId) {
-    return `pbi_filters_${reportId}`;
-  }
+  function savedKey(reportId) { return `pbi_filters_${reportId}`; }
+  function logToPage(x){ const el=document.getElementById('log'); el.textContent += (typeof x==='string'?x:JSON.stringify(x,null,2))+"\n"; }
 
   async function loadReport() {
     try {
       const isAdmin = qs('admin') === '1';
       const mode = isAdmin ? 'edit' : 'view';
 
+      // Gọi function lấy token
       const params = new URLSearchParams();
       params.set('mode', mode);
-      if (qs('reportId'))  params.set('reportId',  qs('reportId'));
-      if (qs('datasetId')) params.set('datasetId', qs('datasetId'));
-      if (qs('groupId'))   params.set('groupId',   qs('groupId'));
+      ['reportId','datasetId','groupId'].forEach(k => { if (qs(k)) params.set(k, qs(k)); });
 
       const res = await fetch('/.netlify/functions/embed-token?' + params.toString());
-      const data = await res.json();
-
-      if (data.error) {
-        document.body.insertAdjacentHTML('beforeend', "<pre style='color:red'>"+JSON.stringify(data,null,2)+"</pre>");
-        return;
+      let data;
+      try { data = await res.json(); } catch (e) {
+        logToPage('❌ Không parse được JSON từ embed-token'); return;
       }
+      if (!res.ok || data.error) { logToPage(['❌ embed-token error', data]); return; }
 
       // Badge
       const badge = document.getElementById('modeBadge');
       badge.textContent = data.mode || (isAdmin ? 'Edit' : 'View');
       badge.className = 'badge ' + (isAdmin ? 'edit' : 'view');
 
-      // Embed
+      // Cấu hình embed
       const config = {
         type: 'report',
         id: data.reportId,
@@ -76,54 +71,57 @@
       };
 
       const container = document.getElementById('reportContainer');
+      if (!container) { logToPage('❌ Không tìm thấy #reportContainer'); return; }
+
+      // Embed
       report = powerbi.embed(container, config);
 
-      // Áp saved filters (nếu có) sau khi report load
+      // Sự kiện
       report.on('loaded', async () => {
+        logToPage('✅ Report loaded');
+        // Áp filters đã lưu (nếu có)
         try {
           const key = savedKey(data.reportId);
           const saved = localStorage.getItem(key);
           if (saved) {
-            await report.setFilters(JSON.parse(saved));
-            console.log('Applied saved filters from localStorage:', key);
+            const parsed = JSON.parse(saved);
+            if (Array.isArray(parsed)) {
+              await report.setFilters(parsed);
+              logToPage('🔁 Applied saved filters');
+            } else {
+              logToPage('ℹ️ Saved filters không phải mảng, bỏ qua');
+            }
           }
-        } catch (e) {
-          console.warn('Apply saved filters error:', e);
-        }
+        } catch (e) { logToPage(['⚠️ Apply filters error', String(e)]); }
       });
 
-      report.on('error', e => console.error(e.detail));
+      report.on('rendered', () => logToPage('🎨 Report rendered'));
+      report.on('error', e => { logToPage(['❌ Report error', e?.detail || e]); });
 
-      // Gắn sự kiện cho nút Save/Reset
-      document.getElementById('btnSave').onclick = async () => {
+      // Nút Save/Reset (sau khi report đã khởi tạo)
+      document.getElementById('btnSave')?.addEventListener('click', async () => {
         try {
           const filters = await report.getFilters();
           localStorage.setItem(savedKey(data.reportId), JSON.stringify(filters));
           alert('✅ View saved!');
-        } catch (e) {
-          console.error('Save view error:', e);
-          alert('Save failed. Check console.');
-        }
-      };
+        } catch (e) { logToPage(['❌ Save error', String(e)]); alert('Save failed.'); }
+      });
 
-      document.getElementById('btnReset').onclick = async () => {
+      document.getElementById('btnReset')?.addEventListener('click', async () => {
         try {
-          await report.resetFilters(); // reset toàn bộ filter hiện tại
+          await report.resetFilters();
           localStorage.removeItem(savedKey(data.reportId));
           alert('🔄 View reset!');
-        } catch (e) {
-          console.error('Reset view error:', e);
-          alert('Reset failed. Check console.');
-        }
-      };
+        } catch (e) { logToPage(['❌ Reset error', String(e)]); alert('Reset failed.'); }
+      });
 
     } catch (err) {
-      console.error('Error loading report:', err);
+      logToPage(['❌ Outer error', String(err)]);
+      console.error(err);
     }
   }
 
   loadReport();
-
   </script>
 </body>
 </html>
