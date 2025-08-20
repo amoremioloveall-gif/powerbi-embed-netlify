@@ -16,74 +16,114 @@
     Survey Report Demo
     <span id="modeBadge" class="badge view">View</span>
   </h2>
+  <button id="btnSave">💾 Save my view</button>
+<button id="btnReset">🔄 Reset</button>
   <div id="reportContainer"></div>
 
   <!-- Power BI Client SDK -->
   <script src="https://cdn.jsdelivr.net/npm/powerbi-client/dist/powerbi.min.js"></script>
   <script>
-    const models = window['powerbi-client'].models;
+    <script>
+  const models = window['powerbi-client'].models;
+  let report; // để dùng ngoài loadReport()
 
-    function qs(name) {
-      const url = new URL(location.href);
-      return url.searchParams.get(name);
-    }
+  function qs(name) {
+    const url = new URL(location.href);
+    return url.searchParams.get(name);
+  }
 
-    async function loadReport() {
-      try {
-        // 1) Quyết định chế độ
-        const isAdmin = qs('admin') === '1';
-        const mode = isAdmin ? 'edit' : 'view';
+  // Tạo key lưu filters riêng theo reportId (tránh đè nhau)
+  function savedKey(reportId) {
+    return `pbi_filters_${reportId}`;
+  }
 
-        // 2) Ghép URL gọi function + cho phép override IDs (nếu truyền trên URL)
-        const params = new URLSearchParams();
-        params.set('mode', mode);
-        if (qs('reportId'))  params.set('reportId',  qs('reportId'));
-        if (qs('datasetId')) params.set('datasetId', qs('datasetId'));
-        if (qs('groupId'))   params.set('groupId',   qs('groupId'));
+  async function loadReport() {
+    try {
+      const isAdmin = qs('admin') === '1';
+      const mode = isAdmin ? 'edit' : 'view';
 
-        const res = await fetch('/.netlify/functions/embed-token?' + params.toString());
-        const data = await res.json();
+      const params = new URLSearchParams();
+      params.set('mode', mode);
+      if (qs('reportId'))  params.set('reportId',  qs('reportId'));
+      if (qs('datasetId')) params.set('datasetId', qs('datasetId'));
+      if (qs('groupId'))   params.set('groupId',   qs('groupId'));
 
-        if (data.error) {
-          document.body.insertAdjacentHTML('beforeend', "<pre style='color:red'>"+JSON.stringify(data,null,2)+"</pre>");
-          return;
-        }
+      const res = await fetch('/.netlify/functions/embed-token?' + params.toString());
+      const data = await res.json();
 
-        // 3) Cập nhật badge chế độ
-        const badge = document.getElementById('modeBadge');
-        badge.textContent = data.mode || (isAdmin ? 'Edit' : 'View');
-        badge.className = 'badge ' + (isAdmin ? 'edit' : 'view');
-
-        // 4) Cấu hình embed (Edit cho admin, View cho user)
-        const config = {
-          type: 'report',
-          id: data.reportId,
-          embedUrl: data.embedUrl,
-          accessToken: data.token,
-          tokenType: models.TokenType.Embed,
-          viewMode: isAdmin ? models.ViewMode.Edit : models.ViewMode.View,
-          settings: {
-            panes: {
-              filters: { visible: true },
-              pageNavigation: { visible: true }
-            },
-            navContentPaneEnabled: true
-          }
-        };
-
-        const container = document.getElementById('reportContainer');
-        const report = powerbi.embed(container, config);
-
-        // 5) Lắng nghe sự kiện
-        report.on('loaded', () => console.log('Report loaded'));
-        report.on('error', e => console.error(e.detail));
-
-      } catch (err) {
-        console.error('Error loading report:', err);
+      if (data.error) {
+        document.body.insertAdjacentHTML('beforeend', "<pre style='color:red'>"+JSON.stringify(data,null,2)+"</pre>");
+        return;
       }
-    }
 
-    loadReport();
+      // Badge
+      const badge = document.getElementById('modeBadge');
+      badge.textContent = data.mode || (isAdmin ? 'Edit' : 'View');
+      badge.className = 'badge ' + (isAdmin ? 'edit' : 'view');
+
+      // Embed
+      const config = {
+        type: 'report',
+        id: data.reportId,
+        embedUrl: data.embedUrl,
+        accessToken: data.token,
+        tokenType: models.TokenType.Embed,
+        viewMode: isAdmin ? models.ViewMode.Edit : models.ViewMode.View,
+        settings: {
+          panes: { filters: { visible: true }, pageNavigation: { visible: true } },
+          navContentPaneEnabled: true
+        }
+      };
+
+      const container = document.getElementById('reportContainer');
+      report = powerbi.embed(container, config);
+
+      // Áp saved filters (nếu có) sau khi report load
+      report.on('loaded', async () => {
+        try {
+          const key = savedKey(data.reportId);
+          const saved = localStorage.getItem(key);
+          if (saved) {
+            await report.setFilters(JSON.parse(saved));
+            console.log('Applied saved filters from localStorage:', key);
+          }
+        } catch (e) {
+          console.warn('Apply saved filters error:', e);
+        }
+      });
+
+      report.on('error', e => console.error(e.detail));
+
+      // Gắn sự kiện cho nút Save/Reset
+      document.getElementById('btnSave').onclick = async () => {
+        try {
+          const filters = await report.getFilters();
+          localStorage.setItem(savedKey(data.reportId), JSON.stringify(filters));
+          alert('✅ View saved!');
+        } catch (e) {
+          console.error('Save view error:', e);
+          alert('Save failed. Check console.');
+        }
+      };
+
+      document.getElementById('btnReset').onclick = async () => {
+        try {
+          await report.resetFilters(); // reset toàn bộ filter hiện tại
+          localStorage.removeItem(savedKey(data.reportId));
+          alert('🔄 View reset!');
+        } catch (e) {
+          console.error('Reset view error:', e);
+          alert('Reset failed. Check console.');
+        }
+      };
+
+    } catch (err) {
+      console.error('Error loading report:', err);
+    }
+  }
+
+  loadReport();
+
   </script>
 </body>
 </html>
