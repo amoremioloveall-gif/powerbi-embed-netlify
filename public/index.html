@@ -5,13 +5,10 @@
   <title>Power BI Report Embed</title>
   <style>
     body { font-family: sans-serif; margin: 0; padding: 16px; }
-    #reportContainer { width: 100%; height: 80vh; border: 1px solid #ddd; }
+    #reportContainer { width: 100%; height: 90vh; border: 1px solid #ddd; }
     .badge { display:inline-block; padding:4px 8px; border-radius:6px; margin-left:8px; font-size:12px; }
     .view { background:#eef; }
     .edit { background:#fee; }
-    #controls { margin: 12px 0; display:flex; gap:8px; flex-wrap:wrap; }
-    #log { color:#b00; white-space:pre-wrap; font-size:12px; max-height:18vh; overflow:auto; background:#fafafa; border:1px dashed #ddd; padding:8px; }
-    button { cursor:pointer; }
   </style>
 </head>
 <body>
@@ -19,220 +16,111 @@
     Survey Report Demo
     <span id="modeBadge" class="badge view">View</span>
   </h2>
-
-  <div id="controls">
-    <button id="btnSave">💾 Save my view</button>
-    <button id="btnReset">🔄 Reset</button>
-  </div>
-
+  <button id="btnSave">💾 Save my view</button>
+  <button id="btnReset">🔄 Reset (to Default)</button>
   <div id="reportContainer"></div>
-  <pre id="log"></pre>
+  <pre id="log" style="color:#b00; white-space:pre-wrap;"></pre>
 
   <!-- Power BI Client SDK -->
   <script src="https://cdn.jsdelivr.net/npm/powerbi-client/dist/powerbi.min.js"></script>
   <script>
-    const models = window['powerbi-client']?.models;
-    let report;               // embed instance
-    let currentReportId = ''; // để làm key lưu
+  const models = window['powerbi-client'].models;
+  let report; // giữ toàn cục
 
-    /* ===== Utils ===== */
-    function qs(name){ const u=new URL(location.href); return u.searchParams.get(name); }
-    function keyFor(reportId){ return `pbi_viewstate_${reportId}`; }
-    function log(x){ const el=document.getElementById('log'); el.textContent += (typeof x==='string'?x:JSON.stringify(x,null,2)) + "\n"; }
+  function qs(name) {
+    const url = new URL(location.href);
+    return url.searchParams.get(name);
+  }
+  function savedKey(reportId) { return `pbi_filters_${reportId}`; }
+  function logToPage(x){ 
+    const el=document.getElementById('log'); 
+    el.textContent += (typeof x==='string'?x:JSON.stringify(x,null,2))+"\n"; 
+  }
 
-    /* ===== Capture current state (report filters + page filters + slicers) ===== */
-    async function captureState(){
-      const state = { version:1, reportId: currentReportId, reportFilters:[], pages:[] };
+  async function loadReport() {
+    try {
+      const isAdmin = qs('admin') === '1';
+      const mode = isAdmin ? 'edit' : 'view';
 
-      // Report-level filters
-      try { state.reportFilters = await report.getFilters(); }
-      catch(e){ log(['⚠️ getFilters (report) error', String(e)]); }
+      // Gọi function lấy token
+      const params = new URLSearchParams();
+      params.set('mode', mode);
+      ['reportId','datasetId','groupId'].forEach(k => { if (qs(k)) params.set(k, qs(k)); });
 
-      try{
-        const pages = await report.getPages();
-        for (const page of pages){
-          const p = { name: page.name, displayName: page.displayName, filters: [], slicers: [] };
+      const res = await fetch('/.netlify/functions/embed-token?' + params.toString());
+      let data;
+      try { data = await res.json(); } catch (e) {
+        logToPage('❌ Không parse được JSON từ embed-token'); return;
+      }
+      if (!res.ok || data.error) { logToPage(['❌ embed-token error', data]); return; }
 
-          // Page-level filters
-          try { p.filters = await page.getFilters(); }
-          catch(e){ log(['⚠️ getFilters (page)', page.name, String(e)]); }
+      // Badge
+      const badge = document.getElementById('modeBadge');
+      badge.textContent = data.mode || (isAdmin ? 'Edit' : 'View');
+      badge.className = 'badge ' + (isAdmin ? 'edit' : 'view');
 
-          // Slicers state
-          try {
-            const visuals = await page.getVisuals();
-            for (const v of visuals){
-              const isSlicer = v.type && v.type.toLowerCase() === 'slicer';
-              const canGet = typeof v.getSlicerState === 'function';
-              if (isSlicer && canGet){
-                try {
-                  const st = await v.getSlicerState();
-                  p.slicers.push({ name: v.name, state: st });
-                } catch(e){ log(['ℹ️ skip slicer (get) error', v.name, String(e)]); }
-              }
-            }
-          } catch(e){ log(['⚠️ getVisuals error', page.name, String(e)]); }
-
-          state.pages.push(p);
+      // Cấu hình embed
+      const config = {
+        type: 'report',
+        id: data.reportId,
+        embedUrl: data.embedUrl,
+        accessToken: data.token,
+        tokenType: models.TokenType.Embed,
+        viewMode: isAdmin ? models.ViewMode.Edit : models.ViewMode.View,
+        settings: {
+          panes: { filters: { visible: true }, pageNavigation: { visible: true } },
+          navContentPaneEnabled: true
         }
-      } catch(e){ log(['⚠️ getPages error', String(e)]); }
+      };
 
-      return state;
-    }
+      const container = document.getElementById('reportContainer');
+      report = powerbi.embed(container, config);
 
-    /* ===== Apply saved state safely ===== */
-    async function applyState(saved){
-      if (!saved) return;
-      // 1) Report-level filters
-      if (Array.isArray(saved.reportFilters)){
-        try { await report.setFilters(saved.reportFilters); }
-        catch(e){ log(['⚠️ setFilters (report) error', String(e)]); }
-      }
-      // 2) Page-level + slicers
-      try{
-        const pages = await report.getPages();
-        for (const page of pages){
-          const sp = saved.pages?.find(x => x.name === page.name || x.displayName === page.displayName);
-          if (!sp) continue;
-
-          if (Array.isArray(sp.filters)){
-            try { await page.setFilters(sp.filters); } 
-            catch(e){ log(['⚠️ setFilters (page)', page.name, String(e)]); }
-          }
-
-          if (Array.isArray(sp.slicers) && sp.slicers.length){
-            try{
-              const visuals = await page.getVisuals();
-              for (const v of visuals){
-                if (v.type && v.type.toLowerCase() === 'slicer' && typeof v.setSlicerState === 'function'){
-                  const target = sp.slicers.find(s => s.name === v.name);
-                  if (target){
-                    try { await v.setSlicerState(target.state); }
-                    catch(e){ log(['ℹ️ slicer apply error', v.name, String(e)]); }
-                  }
-                }
-              }
-            }catch(e){ log(['⚠️ getVisuals for apply error', page.name, String(e)]); }
-          }
-        }
-      }catch(e){ log(['⚠️ apply pages error', String(e)]); }
-    }
-
-    /* ===== Hard Reset: clear report/page filters + clear slicers + remove saved ===== */
-    async function hardReset(){
-      try{
-        // 1) Clear report-level filters
-        try { await report.setFilters([]); } catch(e){ log(['ℹ️ report.setFilters([]) error', String(e)]); }
-
-        // 2) Clear page-level + slicers
-        try{
-          const pages = await report.getPages();
-          for (const page of pages){
-            try { await page.setFilters([]); } catch(e){ log(['ℹ️ page.setFilters([])', page.name, String(e)]); }
-            try{
-              const visuals = await page.getVisuals();
-              for (const v of visuals){
-                if (v.type && v.type.toLowerCase() === 'slicer' && typeof v.setSlicerState === 'function'){
-                  try { await v.setSlicerState({ filters: [] }); }
-                  catch(e){ log(['ℹ️ slicer reset error', v.name, String(e)]); }
-                }
-              }
-            }catch(e){ log(['ℹ️ getVisuals reset error', page.name, String(e)]); }
-          }
-        }catch(e){ log(['ℹ️ reset pages error', String(e)]); }
-
-        // 3) Remove saved state
-        localStorage.removeItem(keyFor(currentReportId || 'default'));
-
-        alert('🔄 View reset!');
-      }catch(e){
-        log(['❌ Hard reset error', String(e)]);
-        alert('Reset failed. Check console/log.');
-      }
-    }
-
-    /* ===== Main load ===== */
-    async function loadReport(){
-      try{
-        if (!models){ log('❌ powerbi-client not loaded'); return; }
-
-        const isAdmin = qs('admin') === '1';
-        const mode = isAdmin ? 'edit' : 'view';
-
-        // Build query for function
-        const params = new URLSearchParams();
-        params.set('mode', mode);
-        ['reportId','datasetId','groupId'].forEach(k => { if (qs(k)) params.set(k, qs(k)); });
-
-        // Fetch token & meta
-        const res = await fetch('/.netlify/functions/embed-token?' + params.toString());
-        let data; try { data = await res.json(); } catch(e){ log('❌ Cannot parse JSON from embed-token'); return; }
-        if (!res.ok || data?.error){ log(['❌ embed-token error', data]); return; }
-
-        currentReportId = data.reportId || '';
-
-        // Badge
-        const badge = document.getElementById('modeBadge');
-        badge.textContent = data.mode || (isAdmin ? 'Edit' : 'View');
-        badge.className = 'badge ' + (isAdmin ? 'edit' : 'view');
-
-        // Embed config
-        const config = {
-          type: 'report',
-          id: data.reportId,
-          embedUrl: data.embedUrl,
-          accessToken: data.token,
-          tokenType: models.TokenType.Embed,
-          viewMode: isAdmin ? models.ViewMode.Edit : models.ViewMode.View,
-          settings: {
-            panes: { filters: { visible: true }, pageNavigation: { visible: true } },
-            navContentPaneEnabled: true
-          }
-        };
-
-        const container = document.getElementById('reportContainer');
-        if (!container){ log('❌ Missing #reportContainer'); return; }
-
-        // Embed
-        report = powerbi.embed(container, config);
-
-        // Events
-        report.on('loaded', async () => {
-          log('✅ Report loaded');
-
-          // Apply saved state (if any)
-          try{
-            const raw = localStorage.getItem(keyFor(currentReportId));
-            if (raw){
-              const saved = JSON.parse(raw);
-              await applyState(saved);
-              log('🔁 Applied saved view state');
+      // Sự kiện
+      report.on('loaded', async () => {
+        logToPage('✅ Report loaded');
+        // Áp filters đã lưu (nếu có)
+        try {
+          const key = savedKey(data.reportId);
+          const saved = localStorage.getItem(key);
+          if (saved) {
+            const parsed = JSON.parse(saved);
+            if (Array.isArray(parsed)) {
+              await report.setFilters(parsed);
+              logToPage('🔁 Applied saved filters');
             }
-          }catch(e){ log(['⚠️ apply saved state error', String(e)]); }
-        });
-
-        report.on('rendered', () => log('🎨 Report rendered'));
-        report.on('error', e => log(['❌ Report error', e?.detail || e]));
-
-        // Buttons
-        document.getElementById('btnSave')?.addEventListener('click', async () => {
-          try{
-            const state = await captureState();
-            localStorage.setItem(keyFor(currentReportId || 'default'), JSON.stringify(state));
-            alert('✅ View saved!');
-          }catch(e){
-            log(['❌ Save error', String(e)]);
-            alert('Save failed. Check console/log.');
           }
-        });
+        } catch (e) { logToPage(['⚠️ Apply filters error', String(e)]); }
+      });
 
-        document.getElementById('btnReset')?.addEventListener('click', hardReset);
+      report.on('rendered', () => logToPage('🎨 Report rendered'));
+      report.on('error', e => { logToPage(['❌ Report error', e?.detail || e]); });
 
-      }catch(e){
-        log(['❌ Outer error', String(e)]);
-      }
+      // Nút Save
+      document.getElementById('btnSave')?.addEventListener('click', async () => {
+        try {
+          const filters = await report.getFilters();
+          localStorage.setItem(savedKey(data.reportId), JSON.stringify(filters));
+          alert('✅ View saved!');
+        } catch (e) { logToPage(['❌ Save error', String(e)]); alert('Save failed.'); }
+      });
+
+      // Nút Reset (chạy bookmark "Default")
+      document.getElementById('btnReset')?.addEventListener('click', async () => {
+        try {
+          await report.bookmarksManager.apply('Default');
+          localStorage.removeItem(savedKey(data.reportId));
+          alert('🔄 Reset to Default bookmark!');
+        } catch (e) { logToPage(['❌ Reset error', String(e)]); alert('Reset failed.'); }
+      });
+
+    } catch (err) {
+      logToPage(['❌ Outer error', String(err)]);
+      console.error(err);
     }
+  }
 
-    loadReport();
+  loadReport();
   </script>
 </body>
 </html>
